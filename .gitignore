@@ -1,0 +1,5 @@
+server/config.php
+server/data/
+*.json
+*.sqlite
+node_modules/
