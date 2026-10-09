@@ -128,6 +128,14 @@ select.btn{padding-right:8px}
 .login .f{margin-bottom:12px}
 .login .btn{width:100%;padding:11px}
 .err{color:var(--danger);min-height:20px;margin-top:8px}
+.brief-btn{flex:none}
+.blist{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.bitem{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:6px 6px 6px 10px;background:var(--bg)}
+.bitem .bname{flex:1;min-width:0;color:var(--accent);font-weight:600;text-decoration:none;overflow-wrap:anywhere}
+.bitem .h,.blist .h{font-size:12px;color:var(--muted);white-space:nowrap}
+@media (max-width:560px){.bitem{flex-wrap:wrap}.bitem .h{order:3;flex-basis:100%}}
+label.up{display:inline-block;cursor:pointer}
+.bf{font-size:12px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;z-index:99;max-width:90vw}
 </style>
 </head>
@@ -192,7 +200,7 @@ const GROUPS = [
   ['Дом', [['model','sel'],['package','sel'],['amount','money'],['budget','money']]],
   ['Участок и решение', [['plot','sel'],['plot_address','text'],['payment','sel'],['term','sel'],['decider','sel'],['lose_reason','sel']]],
   ['Авито', [['avito_ad','text'],['avito_chat','url']]],
-  ['Бриф', [['brief','brief','wide'],['comment','area','wide']]],
+  ['Бриф — заметки', [['brief','brief','wide'],['comment','area','wide']]],
 ];
 
 let S = {token:null, me:null, stages:[], users:[], deals:new Map(), since:null, mobileStage:null, open:null};
@@ -273,7 +281,7 @@ function cardHTML(d){
   if (d.next_date){ const cls = d.next_date < t ? 'over' : d.next_date===t ? 'today' : ''; due = `<div class="due ${cls}">→ ${fmtDate(d.next_date)}${d.next_step?' · '+esc(d.next_step):''}</div>`; }
   else if (d.next_step) due = `<div class="due">→ ${esc(d.next_step)}</div>`;
   const meta = [d.model, money(d.amount), d.responsible].filter(Boolean).map(esc).join(' · ');
-  return `<div class="card" draggable="true" data-id="${d.id}"><div class="t">${esc(d.title)}</div>${meta?`<div class="m">${meta}</div>`:''}${due}</div>`;
+  return `<div class="card" draggable="true" data-id="${d.id}"><div class="t">${d.briefs?'<span class="bf" title="Есть бриф">📄</span> ':''}${esc(d.title)}</div>${meta?`<div class="m">${meta}</div>`:''}${due}</div>`;
 }
 const LIMIT = 60; let expanded = new Set();
 function render(){
@@ -346,9 +354,11 @@ async function openDeal(id){
   const ov = $('#ov');
   const draw = () => {
     ov.innerHTML = `<div class="sheet" role="dialog">
-      <div class="sh-head"><button class="btn ghost" data-close>✕</button><input data-k="title" value="${esc(d.title||'')}" placeholder="Имя клиента"></div>
+      <div class="sh-head"><button class="btn ghost" data-close>✕</button><input data-k="title" value="${esc(d.title||'')}" placeholder="Имя клиента">${id?`<button class="btn brief-btn" id="briefBtn" disabled>📄 Бриф</button>`:''}</div>
       <div class="stages">${S.stages.map(s=>`<button class="st ${s.id===S.open.stage?'on':''}" data-st="${s.id}" style="${s.id===S.open.stage?`background:${s.color};border-color:${s.color}`:''}">${esc(s.name)}</button>`).join('')}</div>
       <div class="sh-body">
+        ${id?`<div class="grp" id="briefGrp"><h4>Брифы клиента</h4><div id="briefList" class="blist"><div class="h">загрузка…</div></div>
+          <label class="btn up">＋ Прикрепить бриф (PDF, HTML, фото)<input type="file" id="briefFile" accept=".pdf,.html,.htm,image/*" hidden></label></div>`:''}
         ${GROUPS.map(([g,fs])=>`<div class="grp"><h4>${g}</h4><div class="grid">${fs.map(f=>fieldHTML(d,f)).join('')}</div></div>`).join('')}
         ${id?`<div class="grp"><h4>Лента</h4><div class="addnote"><textarea id="noteTxt" placeholder="Заметка: звонок, договорённость…"></textarea><button class="btn" id="noteBtn">Добавить</button></div><div class="feed" id="feed">${hist.map(evHTML).join('')||'<div class="ev"><div class="h">загрузка…</div></div>'}</div></div>`:''}
       </div>
@@ -358,7 +368,16 @@ async function openDeal(id){
   };
   draw(); ov.classList.remove('hidden'); document.body.style.overflow='hidden';
   if (!id) setTimeout(()=>ov.querySelector('[data-k=title]').focus(), 50);
-  if (id) api('get',{id}).then(j => { hist=j.history; const f=$('#feed'); if(f) f.innerHTML = hist.map(evHTML).join('') || '<div class="ev"><div class="h">Пока пусто</div></div>'; }).catch(()=>{});
+  if (id) api('get',{id}).then(j => { hist=j.history; const f=$('#feed'); if(f) f.innerHTML = hist.map(evHTML).join('') || '<div class="ev"><div class="h">Пока пусто</div></div>'; drawBriefs(id, j.briefs); }).catch(()=>{});
+  if (id) ov.querySelector('#briefFile').onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 20*1024*1024) { toast('Файл больше 20 МБ'); return; }
+    toast('Загружаю «'+file.name+'»…');
+    try { const data = await new Promise((ok,bad)=>{ const r=new FileReader(); r.onload=()=>ok(String(r.result).split(',')[1]); r.onerror=bad; r.readAsDataURL(file); });
+      const j = await api('brief_upload',{id, name:file.name, data}); drawBriefs(id, j.briefs); refresh(false); toast('Бриф прикреплён'); }
+    catch(err){ toast('Не загрузилось: '+err.message); }
+    e.target.value='';
+  };
 
   const collect = () => { const ch={}; ov.querySelectorAll('[data-k]').forEach(el => {
       const k=el.dataset.k; let v = el.type==='checkbox' ? (el.checked||null) : el.value.trim();
@@ -373,6 +392,10 @@ async function openDeal(id){
     const st = e.target.closest('[data-st]');
     if (st) { S.open.stage = st.dataset.st; ov.querySelectorAll('.st').forEach(b=>{const on=b.dataset.st===S.open.stage, c=stageById(b.dataset.st).color; b.classList.toggle('on',on); b.style.background=on?c:''; b.style.borderColor=on?c:'';});
       if (id) { await moveDeal(id, S.open.stage); S.open.base.stage=S.open.stage; api('get',{id}).then(j=>{const f=$('#feed'); if(f) f.innerHTML=j.history.map(evHTML).join('');}); } return; }
+    if (e.target.id==='briefBtn') { const a=ov.querySelector('.blist a.open'); if (a) window.open(a.href,'_blank','noopener'); return; }
+    const del = e.target.closest('[data-bdel]');
+    if (del) { if (!confirm('Удалить бриф «'+del.dataset.bdel+'»?')) return;
+      try { const j=await api('brief_delete',{id, name:del.dataset.bdel}); drawBriefs(id,j.briefs); refresh(false); } catch(err){ toast(err.message); } return; }
     if (e.target.id==='noteBtn') { const t=$('#noteTxt').value.trim(); if(!t) return;
       try { await api('note',{id,text:t}); $('#noteTxt').value=''; const j=await api('get',{id}); $('#feed').innerHTML=j.history.map(evHTML).join(''); } catch(err){ toast(err.message); } return; }
     if (e.target.id==='saveBtn') {
@@ -385,6 +408,13 @@ async function openDeal(id){
       catch(err){ toast('Ошибка: '+err.message); e.target.disabled=false; }
     }
   };
+}
+function briefURL(id,name){ return DEMO ? '#' : API + '?action=brief_file&id=' + id + '&name=' + encodeURIComponent(name) + '&token=' + encodeURIComponent(S.token); }
+function drawBriefs(id, list){
+  const box = $('#briefList'), btn = $('#briefBtn'); if (!box) return; list = list || [];
+  box.innerHTML = list.length ? list.map((b,i)=>`<div class="bitem"><a class="${i===0?'open ':''}bname" href="${briefURL(id,b.name)}" target="_blank" rel="noopener">📄 ${esc(b.name)}</a><span class="h">${fmtDT(b.at)} · ${Math.max(1,Math.round(b.size/1024))} КБ</span><button class="btn ghost" data-bdel="${esc(b.name)}" title="Удалить">✕</button></div>`).join('')
+    : '<div class="h">Брифа пока нет — прикрепите файл или попросите Claude.</div>';
+  if (btn) { btn.disabled = !list.length; btn.title = list.length ? 'Открыть: '+list[0].name : 'Брифа нет'; }
 }
 function closeDeal(collect){
   if (collect && Object.keys(collect()).length && !confirm('Есть несохранённые изменения. Закрыть без сохранения?')) return;
